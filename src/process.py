@@ -30,7 +30,7 @@ def process():
 
     print("Starting training for U-Net ... ")
     unet_service = UNetService(encoder_name="resnet34", classes=21, lr=1e-4, device=DEVICE)
-    unet_checkpoint_path = os.path.join("results", "best_unet.pth")
+    unet_checkpoint_path = os.path.join("results", "weights", "best_unet.pth")
 
     if not os.path.exists(unet_checkpoint_path):
         unet_service.fit(train_loader, val_loader, epochs=EPOCHS, save_path=unet_checkpoint_path)
@@ -44,7 +44,7 @@ def process():
 
     print("Starting training for FCN ...")
     fcn_service = FCNService(device=DEVICE)
-    fcn_checkpoint_path = os.path.join("results", "best_fcn.pth")
+    fcn_checkpoint_path = os.path.join("results","weights", "best_fcn.pth")
 
 
     if not os.path.exists(fcn_checkpoint_path):
@@ -59,7 +59,7 @@ def process():
 
     print("Starting training for SegFormer ...")
     segformer_service = SegFormerService(device=DEVICE)
-    segformer_checkpoint_path = os.path.join("results", "best_segformer.pth")
+    segformer_checkpoint_path = os.path.join("results", "weights", "best_segformer.pth")
 
     if not os.path.exists(segformer_checkpoint_path):
         segformer_service.fit(train_loader, val_loader, epochs=EPOCHS, save_path=segformer_checkpoint_path)
