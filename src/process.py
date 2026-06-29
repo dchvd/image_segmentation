@@ -1,21 +1,21 @@
 import os
-import torch
 from torch.utils.data import DataLoader
 
 from src.service.unet_service import UNetService
 from src.service.fcn_service import FCNService
-from src.service.vit_service import ViTService
 from src.service.transformation_service import TransformationService
 from src.service.kaggle_pytorch_service import KagglePytorchService
+from src.service.seg_former_service import SegFormerService
+from src.service.performance_visualizer_service import PerformanceVisualizerService
 
 
 def process():
     DATA_DIR = "data/VOC2012_train_val" 
     # BATCH_SIZE = 16
     # EPOCHS = 10
-    # IMAGE_SIZE = (256, 256)
+    #IMAGE_SIZE = (256, 256)
     BATCH_SIZE = 8
-    EPOCHS = 5
+    EPOCHS = 10
     IMAGE_SIZE = (128, 128)
     DEVICE = "cpu"
 
@@ -33,7 +33,6 @@ def process():
     unet_checkpoint_path = os.path.join("results", "best_unet.pth")
 
     if not os.path.exists(unet_checkpoint_path):
-        print("Starting training for U-Net ... ")
         unet_service.fit(train_loader, val_loader, epochs=EPOCHS, save_path=unet_checkpoint_path)
     else:
         print(f"This model was already trained and saved at ({unet_checkpoint_path}). Ignored.")
@@ -47,8 +46,8 @@ def process():
     fcn_service = FCNService(device=DEVICE)
     fcn_checkpoint_path = os.path.join("results", "best_fcn.pth")
 
+
     if not os.path.exists(fcn_checkpoint_path):
-        print("Starting training for FCN ...")
         fcn_service.fit(train_loader, val_loader, epochs=EPOCHS, save_path=fcn_checkpoint_path)
     else:
         print(f"This model was already trained and saved at {fcn_checkpoint_path}). Ignored.")
@@ -56,18 +55,26 @@ def process():
     
     fcn_miou = fcn_service.evaluate_segmentation(val_loader)
     results["FCN (ResNet50)"] = fcn_miou
-    print(DEVICE)
 
 
-    print("Starting training for ViT ...")
-    vit_service = ViTService(model_name="nvidia/mit-b0", classes=21, lr=6e-5, device=DEVICE)
-    vit_service.fit(train_loader, val_loader, epochs=EPOCHS, save_path="best_vit_segformer")
-    _, best_vit_miou = vit_service.validate_epoch(val_loader)
-    results["ViT (SegFormer B0)"] = best_vit_miou
+    print("Starting training for SegFormer ...")
+    segformer_service = SegFormerService(device=DEVICE)
+    segformer_checkpoint_path = os.path.join("results", "best_segformer.pth")
 
-    print("\n\n" + "📊" + " ="*15 + " BILAN COMPARATIF " + "= "*15 + "\n")
-    print(f"{'Architecture / Approche':<30} | {'Mean IoU (mIoU) sur Validation':<35}")
-    print("-" * 70)
+    if not os.path.exists(segformer_checkpoint_path):
+        segformer_service.fit(train_loader, val_loader, epochs=EPOCHS, save_path=segformer_checkpoint_path)
+    else:
+        print(f"This model was already trained and saved at {segformer_checkpoint_path}). Ignored.")
+        segformer_service.load_weights(segformer_checkpoint_path)
+    
+    segformer_miou = segformer_service.evaluate_segmentation(val_loader)
+    results["SegFormer (B0)"] = segformer_miou
+
+
+    print("Results")
+    print(f"{'Architecture / Approche':<30} | {'Mean IoU sur Validation':<35}")
     for model_name, miou_score in results.items():
         print(f"{model_name:<30} | {miou_score * 100:.2f} %")
-    print("-" * 70)
+  
+    viz = PerformanceVisualizerService(output_dir="results/visualization")
+    viz.plot_miou_comparison(results)  

@@ -1,33 +1,26 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 from tqdm import tqdm
-import torchvision.models.segmentation as segmentation_models
+from transformers import SegformerForSemanticSegmentation
 
 
-class FCNService:
+class SegFormerService:
 
-    def __init__(self, num_classes=20, lr=1e-4, device=None):
+    def __init__(self, num_classes=20, lr=6e-5, device=None,checkpoint="nvidia/segformer-b0-finetuned-ade-512-512"):
         self.device = device if device else torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.num_classes = num_classes  
-        self.total_classes = self.num_classes + 1  
+        self.total_classes = self.num_classes + 1 
         self.lr = lr
-
-       
-        self.model = segmentation_models.fcn_resnet50(
-            weights=segmentation_models.FCN_ResNet50_Weights.DEFAULT
+        self.model = SegformerForSemanticSegmentation.from_pretrained(
+            checkpoint,
+            num_labels=self.total_classes,
+            ignore_mismatched_sizes=True,
         )
-
-        # Remplacer la dernière couche du classifieur pour matcher nos classes
-        in_channels = self.model.classifier[4].in_channels
-        self.model.classifier[4] = nn.Conv2d(in_channels, self.total_classes, kernel_size=1)
-
         self.model = self.model.to(self.device)
-
-        # 2. Perte de segmentation standard : cross-entropy pixel par pixel
-        # ignore_index=255 pour ignorer les pixels de contour (void) Pascal VOC
         self.criterion = nn.CrossEntropyLoss(ignore_index=255)
-        self.optimizer = optim.Adam(self.model.parameters(), lr=self.lr)
+        self.optimizer = optim.AdamW(self.model.parameters(), lr=self.lr)
 
     @staticmethod
     def _prepare_masks(masks):
@@ -35,17 +28,25 @@ class FCNService:
             masks = masks.squeeze(1)
         return masks.long()
 
+    def _forward_upsampled(self, images):
+        outputs = self.model(pixel_values=images)
+        logits = outputs.logits  
+        upsampled_logits = F.interpolate(
+            logits, size=images.shape[-2:], mode="bilinear", align_corners=False
+        )
+        return upsampled_logits
+
     def train_epoch(self, train_loader):
         self.model.train()
         running_loss = 0.0
 
-        pbar = tqdm(train_loader, desc="[Train FCN]")
+        pbar = tqdm(train_loader, desc="[Train SegFormer]")
         for images, masks in pbar:
             images = images.to(self.device)
             masks = self._prepare_masks(masks).to(self.device)
 
             self.optimizer.zero_grad()
-            outputs = self.model(images)["out"] 
+            outputs = self._forward_upsampled(images)
             loss = self.criterion(outputs, masks)
 
             loss.backward()
@@ -61,19 +62,20 @@ class FCNService:
         running_loss = 0.0
 
         with torch.no_grad():
-            pbar = tqdm(val_loader, desc="[Val FCN]")
+            pbar = tqdm(val_loader, desc="[Val SegFormer]")
             for images, masks in pbar:
                 images = images.to(self.device)
                 masks = self._prepare_masks(masks).to(self.device)
 
-                outputs = self.model(images)["out"]
+                outputs = self._forward_upsampled(images)
                 loss = self.criterion(outputs, masks)
                 running_loss += loss.item()
                 pbar.set_postfix(loss=f"{loss.item():.4f}")
 
         return running_loss / len(val_loader)
 
-    def fit(self, train_loader, val_loader, epochs=10, save_path="/results/best_fcn_voc.pth"):
+    def fit(self, train_loader, val_loader, epochs=10, save_path="best_segformer_voc.pth"):
+        """ Boucle principale d'entraînement """
         best_val_loss = float('inf')
 
         for epoch in range(epochs):
@@ -89,7 +91,6 @@ class FCNService:
 
     def load_weights(self, path):
         self.model.load_state_dict(torch.load(path, map_location=self.device))
-        print(f"Loaded weights : {path}")
 
     def get_segmentation_mask(self, image_tensor):
         self.model.eval()
@@ -99,12 +100,13 @@ class FCNService:
         image_tensor = image_tensor.to(self.device)
 
         with torch.no_grad():
-            output = self.model(image_tensor)["out"]  
-            pred_mask = output.argmax(dim=1).squeeze(0)  
+            outputs = self._forward_upsampled(image_tensor)  
+            pred_mask = outputs.argmax(dim=1).squeeze(0)
 
         return pred_mask.cpu().numpy()
 
     def evaluate_segmentation(self, val_loader):
+        print("\nCalculating MIoU for SegFormer...")
         self.model.eval()
         ious = []
 
@@ -113,7 +115,7 @@ class FCNService:
                 images = images.to(self.device)
                 masks = self._prepare_masks(masks)
 
-                outputs = self.model(images)["out"]
+                outputs = self._forward_upsampled(images)
                 preds = outputs.argmax(dim=1).cpu().numpy()
                 true_masks = masks.numpy()
 

@@ -2,4 +2,4 @@
 __pycache__/
 data/
 best_vit_segformer/
-results/
+results/weights/
